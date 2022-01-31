@@ -1,2 +1,3 @@
 # Scan_BackdoorIntelME
-Backup of code 
+
+Detect Backdoor Hardware (Intel) 
