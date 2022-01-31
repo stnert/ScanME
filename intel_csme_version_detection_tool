@@ -1,0 +1,147 @@
+#!/usr/bin/env python
+"""
+Copyright (C) 2017-2019 Intel Corporation.
+
+This software and the related documents are Intel copyrighted materials,
+and your use of them is governed by the express license under which they
+were provided to you (License). Unless the License provides otherwise,
+you may not use, modify, copy, publish, distribute, disclose or transmit
+this software or the related documents without Intel's prior written permission.
+
+This software and the related documents are provided as is, with no express or
+implied warranties, other than those that are expressly stated in the License.
+
+SA-00125 Detection Tool
+"""
+import os
+import sys
+import re
+import errno
+from socket import gethostname
+from shlex import shlex
+import fmt.screen
+from fmt.log import Log
+import fmt.xml
+from common.heci import get_fw_state
+from common import glob
+from sps import exceptions as sps_ex
+
+def gethost():
+    '''Extract host name'''
+    try:
+        return gethostname()
+    except:
+        return "NA"
+
+def processor():
+    '''Extract first processor name'''
+    try:
+        with open("/proc/cpuinfo", 'r') as the_file:
+            info = the_file.read().strip()
+        for line in info.split("\n"):
+            if "model name" in line:
+                return re.sub(".*model name.*:", "", line, 1).strip()
+    except:
+        return "N/A"
+
+def manufacturer():
+    '''Extract manufacturer'''
+    try:
+        with open("/sys/class/dmi/id/sys_vendor", 'r') as the_file:
+            info = the_file.read().strip()
+        return info
+    except:
+        return "N/A"
+
+def model():
+    '''Extract model'''
+    try:
+        with open("/sys/class/dmi/id/product_name", 'r') as the_file:
+            info = the_file.read().strip()
+        return info
+    except:
+        return "N/A"
+
+def distribution():
+    '''Format distribution'''
+    dist = "N/A"
+    kernel = "N/A"
+    try:
+        name = ""
+        version = ""
+        pretty = ""
+        with open("/etc/os-release") as the_rel:
+            parser = shlex(the_rel, posix=True)
+            parser.whitespace_split = True
+            for line in parser:
+                key, value = line.split('=', 1)
+                if key == "PRETTY_NAME":
+                    pretty = value
+                if key == "NAME":
+                    name = value
+                if key == "VERSION":
+                    version = value
+        if pretty:
+            dist = pretty
+        elif name or version:
+            dist = name + ' ' + version
+    except:
+        pass
+    try:
+        kernel = os.uname()[2]
+    except:
+        pass
+
+    return dist + ' (' + kernel + ')'
+
+def main():
+    """Main routine"""
+
+    log = Log(gethost())
+    fmt.screen.print_header()
+    fmt.screen.print_system_info(gethost(), manufacturer(),
+                                 model(), processor(),
+                                 distribution())
+    log.log_system_info(gethost(), manufacturer(),
+                        model(), processor(),
+                        distribution())
+    try:
+        ver_str, code, family, no_drv = get_fw_state()
+    except (OSError, IOError) as the_err:
+        if the_err.errno == errno.ENOENT:
+            code = glob.HECI_NOT_INSTALLED
+            no_drv = True
+        else:
+            code = glob.HECI_ERROR
+            no_drv = False
+        if the_err.errno == errno.EACCES:
+            fmt.screen.print_need_root()
+        ver_str = "N/A"
+        family = glob.UNKNOWN
+        log.log("HECI error: %s[%d]\n" %
+                (the_err.strerror, the_err.errno))
+    except (sps_ex.PlatformUnknown, sps_ex.HeciRevealError, \
+            sps_ex.HeciHideError, sps_ex.SendReceiveMessageError) as the_err:
+        code = glob.HECI_NOT_INSTALLED
+        no_drv = True
+        family = glob.UNKNOWN
+        ver_str = "N/A"
+        log.log(the_err.msg)
+
+    if code != glob.HECI_ERROR and code != glob.HECI_NOT_INSTALLED:
+        fmt.screen.print_me_info(family, ver_str)
+        log.log_me_info(family, ver_str)
+
+    fmt.screen.print_risk(family, code)
+    log.log("Status: %s\n" % glob.status2str(code))
+
+    fmt.xml.report(gethost(), manufacturer(),
+                   model(), processor(), distribution(),
+                   ver_str, family, code, no_drv)
+
+    fmt.screen.print_footer()
+    log.stop()
+    return code
+
+if __name__ == '__main__':
+    sys.exit(main())
